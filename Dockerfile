@@ -15,11 +15,13 @@ RUN apk add --no-cache libc6-compat openssl
 # Copy package files
 COPY package.json package-lock.json ./
 COPY prisma ./prisma/
+COPY prisma.config.ts ./
 
 # Install dependencies
 RUN npm ci --ignore-scripts
 
-# Generate Prisma client
+# Generate Prisma client (needs DATABASE_URL but doesn't connect)
+ENV DATABASE_URL="postgresql://dummy:dummy@localhost:5432/dummy?schema=public"
 RUN npx prisma generate
 
 # -----------------------------------------------------------------------------
