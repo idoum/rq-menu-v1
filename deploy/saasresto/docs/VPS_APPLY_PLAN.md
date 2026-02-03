@@ -16,6 +16,58 @@
   - `*.saasresto.isprojets.cloud` → VPS IP
 - [ ] Hostinger API token ready
 - [ ] GHCR credentials ready
+- [ ] GitHub Actions self-hosted runner configured (see below)
+
+---
+
+## Phase 0: Self-Hosted Runner Setup (One-Time)
+
+Before CI/CD can deploy automatically, the runner user must have proper permissions.
+
+### 0.1 Create Runner User (if not exists)
+
+```bash
+# Create user for GitHub Actions runner
+sudo useradd -m -s /bin/bash gha-rqmenu
+
+# Add to docker group (required for docker commands without sudo)
+sudo usermod -aG docker gha-rqmenu
+```
+
+### 0.2 Setup /opt/saasresto Ownership
+
+```bash
+# Create directory and give ownership to runner user
+sudo mkdir -p /opt/saasresto
+sudo chown -R gha-rqmenu:gha-rqmenu /opt/saasresto
+```
+
+### 0.3 Verify Permissions
+
+```bash
+# Switch to runner user and test
+sudo -u gha-rqmenu bash -c '
+  echo "User: $(whoami)"
+  echo "Groups: $(groups)"
+  echo "Docker test: $(docker ps > /dev/null 2>&1 && echo OK || echo FAIL)"
+  echo "Write test: $(touch /opt/saasresto/.test && rm /opt/saasresto/.test && echo OK || echo FAIL)"
+'
+```
+
+Expected output:
+```
+User: gha-rqmenu
+Groups: gha-rqmenu docker
+Docker test: OK
+Write test: OK
+```
+
+### 0.4 Install and Configure Runner
+
+Follow GitHub's instructions to install the self-hosted runner as user `gha-rqmenu`:
+1. Go to repo Settings → Actions → Runners → New self-hosted runner
+2. Run the installation commands as `gha-rqmenu` user
+3. Configure as a service: `sudo ./svc.sh install gha-rqmenu`
 
 ---
 

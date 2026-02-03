@@ -93,12 +93,37 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Verify runner permissions
+        run: |
+          echo "=== Runner User ==="
+          whoami
+          echo ""
+          echo "=== User Groups ==="
+          groups
+          echo ""
+          echo "=== Docker Access Test ==="
+          if ! docker ps > /dev/null 2>&1; then
+            echo "❌ ERROR: Cannot access Docker. Ensure runner user is in docker group:"
+            echo "   sudo usermod -aG docker $(whoami)"
+            echo "   Then logout/login or reboot the runner."
+            exit 1
+          fi
+          echo "✅ Docker access OK"
+          echo ""
+          echo "=== /opt/saasresto permissions ==="
+          if [ ! -w "/opt/saasresto" ] 2>/dev/null; then
+            echo "❌ ERROR: Cannot write to /opt/saasresto. Run once on VPS:"
+            echo "   sudo chown -R $(whoami):$(whoami) /opt/saasresto"
+            exit 1
+          fi
+          echo "✅ Write access to /opt/saasresto OK"
+
       - name: Sync infrastructure files to VPS
         run: |
           echo "📁 Syncing infrastructure files..."
           
-          # Create directories if they don't exist
-          sudo mkdir -p /opt/saasresto/{nginx/conf.d,certs/live,data/postgres,backups,uploads,logs,scripts,docs}
+          # Create directories if they don't exist (runner must own /opt/saasresto)
+          mkdir -p /opt/saasresto/{nginx/conf.d,certs/live,data/postgres,backups,uploads,logs,scripts,docs}
           
           # Sync deploy files (exclude .env to preserve secrets)
           rsync -av --exclude='.env' --exclude='.env.*' \
