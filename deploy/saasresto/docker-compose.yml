@@ -1,0 +1,99 @@
+# =============================================================================
+# SAASRESTO Production Docker Compose
+# /opt/saasresto/docker-compose.yml
+# =============================================================================
+# This compose file deploys the SAASRESTO Next.js application with PostgreSQL.
+# It connects to an external "edge" network shared with the existing nginx.
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL Database
+  # ---------------------------------------------------------------------------
+  saasresto-postgres:
+    image: postgres:16-alpine
+    container_name: saasresto-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-saasresto}
+      POSTGRES_USER: ${POSTGRES_USER:-saasresto}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    networks:
+      - saasresto-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-saasresto} -d ${POSTGRES_DB:-saasresto}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    # NOT exposed to edge network - only internal access
+
+  # ---------------------------------------------------------------------------
+  # SAASRESTO Next.js Application
+  # ---------------------------------------------------------------------------
+  saasresto-app:
+    image: ${SAASRESTO_IMAGE:-ghcr.io/your-org/saasresto:latest}
+    container_name: saasresto-app
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Override DATABASE_URL to use internal docker network
+      DATABASE_URL: postgresql://${POSTGRES_USER:-saasresto}:${POSTGRES_PASSWORD}@saasresto-postgres:5432/${POSTGRES_DB:-saasresto}?schema=public
+      NODE_ENV: production
+    volumes:
+      # Uploads directory for user-uploaded images
+      - ./uploads:/app/uploads
+      # Optional: custom entrypoint if needed
+      # - ./scripts/entrypoint.sh:/app/entrypoint.sh:ro
+    networks:
+      - saasresto-internal
+      - edge
+    depends_on:
+      saasresto-postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    # Entrypoint runs migrations then starts the app
+    command: ["sh", "-c", "npx prisma migrate deploy && npm start"]
+
+  # ---------------------------------------------------------------------------
+  # Lego ACME Client (for certificate management)
+  # Runs on-demand via scripts, not as a persistent service
+  # ---------------------------------------------------------------------------
+  lego:
+    image: goacme/lego:latest
+    container_name: saasresto-lego
+    profiles:
+      - tools  # Only runs when explicitly called
+    environment:
+      HOSTINGER_API_KEY: ${HOSTINGER_API_TOKEN:?HOSTINGER_API_TOKEN is required for DNS-01}
+    volumes:
+      - ./certs:/certs
+    working_dir: /certs
+    # Command is overridden by scripts
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  # Internal network for app <-> postgres communication
+  saasresto-internal:
+    driver: bridge
+
+  # External edge network shared with CRM nginx
+  edge:
+    external: true
+
+# =============================================================================
+# Named volumes (optional, we use bind mounts above for easier backup)
+# =============================================================================
+# volumes:
+#   postgres-data:

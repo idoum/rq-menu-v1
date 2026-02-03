@@ -1,0 +1,238 @@
+// Prisma Schema for SaaS Resto - Multi-tenant QR Menu
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// =============================================================================
+// TENANT (Organization/Restaurant)
+// =============================================================================
+
+model Tenant {
+  id        String   @id @default(cuid())
+  slug      String   @unique
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  users                User[]
+  sessions             Session[]
+  passwordResetTokens  PasswordResetToken[]
+  menus                Menu[]
+  categories           Category[]
+  items                Item[]
+  zones                Zone[]
+  qrCodes              QrCode[]
+  branding             TenantBranding?
+
+  @@index([slug])
+}
+
+// =============================================================================
+// BRANDING (Tenant customization)
+// =============================================================================
+
+model TenantBranding {
+  id             String   @id @default(cuid())
+  tenantId       String   @unique
+  logoUrl        String?
+  heroImageUrl   String?
+  primaryColor   String   @default("#111827")   // slate-900
+  secondaryColor String   @default("#6B7280")   // gray-500
+  accentColor    String   @default("#2563EB")   // blue-600
+  fontFamily     String   @default("system")
+  tagline        String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+// =============================================================================
+// USER & AUTH
+// =============================================================================
+
+enum UserRole {
+  OWNER
+  STAFF
+}
+
+model User {
+  id           String   @id @default(cuid())
+  tenantId     String
+  email        String
+  passwordHash String
+  name         String?
+  role         UserRole @default(STAFF)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  tenant               Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  sessions             Session[]
+  passwordResetTokens  PasswordResetToken[]
+
+  // Unique constraint: email unique per tenant
+  @@unique([tenantId, email])
+  @@index([tenantId])
+  @@index([email])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  tenantId  String
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  // User agent / IP for audit (optional)
+  userAgent String?
+  ipAddress String?
+
+  // Relations
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([userId])
+  @@index([tokenHash])
+  @@index([expiresAt])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  tenantId  String
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  // Relations
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// =============================================================================
+// MENU STRUCTURE
+// =============================================================================
+
+model Menu {
+  id          String   @id @default(cuid())
+  tenantId    String
+  name        String
+  description String?
+  isActive    Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  categories Category[]
+
+  @@index([tenantId])
+  @@index([tenantId, isActive])
+}
+
+model Category {
+  id          String   @id @default(cuid())
+  tenantId    String
+  menuId      String
+  name        String
+  description String?
+  imageUrl    String?
+  sortOrder   Int      @default(0)
+  isVisible   Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  menu   Menu   @relation(fields: [menuId], references: [id], onDelete: Cascade)
+  items  Item[]
+
+  @@index([tenantId])
+  @@index([menuId])
+  @@index([tenantId, menuId])
+}
+
+model Item {
+  id          String   @id @default(cuid())
+  tenantId    String
+  categoryId  String
+  name        String
+  description String?
+  price       Decimal  @db.Decimal(10, 2)
+  imageUrl    String?
+  isAvailable Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Dietary/allergen info (optional)
+  isVegetarian Boolean @default(false)
+  isVegan      Boolean @default(false)
+  isGlutenFree Boolean @default(false)
+  allergens    String?
+
+  // Relations
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  category Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([categoryId])
+  @@index([tenantId, isAvailable])
+}
+
+// =============================================================================
+// ZONES & QR CODES
+// =============================================================================
+
+model Zone {
+  id          String   @id @default(cuid())
+  tenantId    String
+  slug        String
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  tenant  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  qrCodes QrCode[]
+
+  // Unique constraint: slug unique per tenant
+  @@unique([tenantId, slug])
+  @@index([tenantId])
+}
+
+model QrCode {
+  id          String   @id @default(cuid())
+  tenantId    String
+  zoneId      String?
+  label       String
+  tableNumber String?
+  targetPath  String   @default("/")
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  zone   Zone?  @relation(fields: [zoneId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([zoneId])
+}

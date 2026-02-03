@@ -1,0 +1,48 @@
+[Unit]
+Description=SaaSResto Next.js Application
+Documentation=https://github.com/yourusername/saasresto
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=saasresto
+Group=saasresto
+WorkingDirectory=/opt/saasresto
+
+# Environment
+Environment=NODE_ENV=production
+Environment=PORT=3000
+EnvironmentFile=/opt/saasresto/.env.production
+
+# Node.js
+ExecStart=/usr/bin/node /opt/saasresto/.next/standalone/server.js
+
+# Restart policy
+Restart=always
+RestartSec=10
+StartLimitInterval=60
+StartLimitBurst=3
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=saasresto
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/saasresto/logs /tmp
+
+# Resource limits
+LimitNOFILE=65535
+LimitNPROC=4096
+
+# Watchdog
+WatchdogSec=30
+NotifyAccess=main
+
+[Install]
+WantedBy=multi-user.target

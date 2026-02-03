@@ -1,0 +1,46 @@
+# Caddyfile for development-like environment
+# Handles wildcard subdomains for multi-tenant routing
+# Usage: caddy run --config infra/proxy/Caddyfile.devlike
+
+# Global options
+{
+    # Local development - no HTTPS
+    auto_https off
+    # Admin API (optional)
+    admin localhost:2019
+}
+
+# Main domain redirect
+saasresto.localhost {
+    redir https://demo.saasresto.localhost{uri}
+}
+
+# Wildcard subdomain handling for tenants
+*.saasresto.localhost {
+    # Extract tenant slug from subdomain
+    @tenant {
+        host_regexp tenant (.+)\.saasresto\.localhost
+    }
+
+    # Reverse proxy to Next.js
+    handle @tenant {
+        reverse_proxy localhost:3000 {
+            # Pass the full host header for tenant identification
+            header_up Host {http.request.host}
+            # Add custom header with tenant slug
+            header_up X-Tenant-Slug {re.tenant.1}
+        }
+    }
+
+    # Fallback
+    handle {
+        respond "Not found" 404
+    }
+}
+
+# Optional: API subdomain (if needed in future)
+# api.saasresto.localhost {
+#     reverse_proxy localhost:3000 {
+#         header_up Host {http.request.host}
+#     }
+# }

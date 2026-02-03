@@ -1,0 +1,163 @@
+name: Deploy SAASRESTO to VPS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    name: Build and Push Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
+      image_digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=
+            type=ref,event=branch
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Generate artifact attestation
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+  deploy:
+    name: Deploy to VPS
+    needs: build
+    runs-on: self-hosted
+    if: github.ref == 'refs/heads/main'
+    environment: production
+
+    steps:
+      - name: Deploy SAASRESTO
+        run: |
+          cd /opt/saasresto
+          
+          echo "📦 Pulling latest image..."
+          docker compose pull
+          
+          echo "🚀 Starting updated containers..."
+          docker compose up -d
+          
+          echo "🧹 Cleaning up old images..."
+          docker image prune -f
+          
+          echo "📋 Container status:"
+          docker compose ps
+
+      - name: Wait for app to be healthy
+        run: |
+          echo "⏳ Waiting for app to be healthy..."
+          for i in {1..30}; do
+            if curl -sf http://localhost:3000/api/health > /dev/null 2>&1; then
+              echo "✅ App is healthy!"
+              exit 0
+            fi
+            echo "   Attempt $i/30 - waiting..."
+            sleep 5
+          done
+          echo "❌ App did not become healthy in time"
+          exit 1
+
+      - name: Verify public endpoint
+        run: |
+          echo "🔍 Verifying public endpoint..."
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://saasresto.isprojets.cloud/api/health)
+          
+          if [ "$HTTP_STATUS" -eq 200 ]; then
+            echo "✅ Public endpoint is responding (HTTP $HTTP_STATUS)"
+          else
+            echo "⚠️ Public endpoint returned HTTP $HTTP_STATUS"
+            exit 1
+          fi
+
+      - name: Send deployment notification
+        if: always()
+        run: |
+          STATUS="${{ job.status }}"
+          if [ "$STATUS" = "success" ]; then
+            echo "✅ Deployment successful!"
+          else
+            echo "❌ Deployment failed!"
+          fi
+          
+          # Optional: Send Slack/Discord notification
+          # curl -X POST -H 'Content-type: application/json' \
+          #   --data "{\"text\":\"SAASRESTO deployment $STATUS\"}" \
+          #   ${{ secrets.SLACK_WEBHOOK }}
+
+  rollback:
+    name: Rollback (Manual)
+    runs-on: self-hosted
+    if: github.event_name == 'workflow_dispatch' && failure()
+    needs: deploy
+    environment: production
+
+    steps:
+      - name: Rollback to previous version
+        run: |
+          cd /opt/saasresto
+          
+          echo "🔄 Rolling back..."
+          
+          # Get previous image
+          PREV_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep saasresto | head -2 | tail -1)
+          
+          if [ -n "$PREV_IMAGE" ]; then
+            echo "   Rolling back to: $PREV_IMAGE"
+            sed -i "s|SAASRESTO_IMAGE=.*|SAASRESTO_IMAGE=$PREV_IMAGE|" .env
+            docker compose up -d
+            echo "✅ Rollback complete"
+          else
+            echo "❌ No previous image found for rollback"
+            exit 1
+          fi

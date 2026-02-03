@@ -1,0 +1,76 @@
+# =============================================================================
+# Docker Ignore File
+# Exclude files not needed in the Docker build context
+# =============================================================================
+
+# Dependencies (installed in container)
+node_modules
+.pnp
+.pnp.js
+
+# Build output (rebuilt in container)
+.next
+out
+build
+dist
+
+# Testing
+coverage
+.nyc_output
+
+# Development
+.env
+.env.local
+.env.development
+.env.development.local
+*.log
+
+# Keep .env.example for reference
+!.env.example
+
+# IDE and editors
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Git
+.git
+.gitignore
+
+# Documentation (optional - remove if you want docs in image)
+*.md
+!README.md
+
+# Deployment files (not needed in app container)
+deploy/
+
+# Local data
+data/
+backups/
+uploads/
+logs/
+
+# Prisma migrations are needed
+!prisma/
+
+# Tests
+__tests__
+*.test.ts
+*.test.tsx
+*.spec.ts
+*.spec.tsx
+jest.config.*
+vitest.config.*
+
+# GitHub
+.github/
+
+# Misc
+*.tsbuildinfo
+next-env.d.ts

@@ -1,0 +1,85 @@
+# Caddyfile for production environment
+# Handles wildcard subdomains with automatic HTTPS via Let's Encrypt
+# Usage: sudo caddy run --config /etc/caddy/Caddyfile
+
+# Global options
+{
+    # Email for Let's Encrypt notifications
+    email admin@isprojets.cloud
+    
+    # Use staging for testing (uncomment to avoid rate limits)
+    # acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+}
+
+# Main domain redirect to demo tenant
+saasresto.isprojets.cloud {
+    redir https://demo.saasresto.isprojets.cloud{uri}
+}
+
+# Wildcard subdomain handling for tenants
+*.saasresto.isprojets.cloud {
+    # TLS configuration with wildcard certificate
+    tls {
+        dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+        # Or use HTTP challenge if not using Cloudflare:
+        # issuer acme {
+        #     preferred_chains smallest
+        # }
+    }
+
+    # Extract tenant slug from subdomain
+    @tenant {
+        host_regexp tenant (.+)\.saasresto\.isprojets\.cloud
+    }
+
+    # Security headers
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        X-XSS-Protection "1; mode=block"
+        Referrer-Policy strict-origin-when-cross-origin
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        -Server
+    }
+
+    # Reverse proxy to Next.js
+    handle @tenant {
+        reverse_proxy localhost:3000 {
+            # Pass the full host header for tenant identification
+            header_up Host {http.request.host}
+            # Add custom header with tenant slug
+            header_up X-Tenant-Slug {re.tenant.1}
+            # Real IP forwarding
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # Health check endpoint
+    handle /health {
+        respond "OK" 200
+    }
+
+    # Fallback
+    handle {
+        respond "Not found" 404
+    }
+}
+
+# Alternative: Without wildcard TLS (using DNS challenge)
+# For servers without Cloudflare, use this simpler approach:
+# 
+# demo.saasresto.isprojets.cloud {
+#     reverse_proxy localhost:3000 {
+#         header_up Host {http.request.host}
+#         header_up X-Tenant-Slug demo
+#     }
+# }
+# 
+# anothertenant.saasresto.isprojets.cloud {
+#     reverse_proxy localhost:3000 {
+#         header_up Host {http.request.host}
+#         header_up X-Tenant-Slug anothertenant
+#     }
+# }

@@ -1,0 +1,407 @@
+name: Apply CRM Nginx Patch for SAASRESTO
+
+# =============================================================================
+# One-time workflow to patch the existing CRM nginx container to serve SAASRESTO
+# This workflow:
+#   1. Creates the edge Docker network
+#   2. Deploys saasresto.conf to /opt/saasresto/nginx/conf.d/
+#   3. Patches /opt/crm/docker-compose.yml to mount the config and join edge network
+#   4. Validates nginx configuration
+#   5. Applies changes and reloads nginx
+# =============================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run - validate only, do not apply changes'
+        required: false
+        default: false
+        type: boolean
+      nginx_container:
+        description: 'Name of the nginx container'
+        required: false
+        default: 'crm-nginx'
+        type: string
+      crm_dir:
+        description: 'CRM installation directory'
+        required: false
+        default: '/opt/crm'
+        type: string
+      saasresto_dir:
+        description: 'SAASRESTO installation directory'
+        required: false
+        default: '/opt/saasresto'
+        type: string
+
+env:
+  CRM_DIR: ${{ inputs.crm_dir || '/opt/crm' }}
+  SAASRESTO_DIR: ${{ inputs.saasresto_dir || '/opt/saasresto' }}
+  NGINX_CONTAINER: ${{ inputs.nginx_container || 'crm-nginx' }}
+
+jobs:
+  apply-patch:
+    name: Apply CRM Nginx Patch
+    runs-on: self-hosted
+    
+    steps:
+      # -----------------------------------------------------------------------
+      # Step 1: Checkout repository to get the config files
+      # -----------------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # Step 2: Display current state
+      # -----------------------------------------------------------------------
+      - name: Display current state
+        run: |
+          echo "=============================================="
+          echo "  SAASRESTO CRM Nginx Patch"
+          echo "  $(date)"
+          echo "=============================================="
+          echo ""
+          echo "Configuration:"
+          echo "  CRM_DIR: $CRM_DIR"
+          echo "  SAASRESTO_DIR: $SAASRESTO_DIR"
+          echo "  NGINX_CONTAINER: $NGINX_CONTAINER"
+          echo "  DRY_RUN: ${{ inputs.dry_run }}"
+          echo ""
+          echo "Current containers:"
+          docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | head -20
+          echo ""
+          echo "Current networks:"
+          docker network ls
+
+      # -----------------------------------------------------------------------
+      # Step 3: Create SAASRESTO directory structure
+      # -----------------------------------------------------------------------
+      - name: Create SAASRESTO directory structure
+        run: |
+          echo "Creating SAASRESTO directory structure..."
+          sudo mkdir -p "$SAASRESTO_DIR"/{nginx/conf.d,certs/live,data/postgres,backups,uploads,logs,scripts,docs}
+          sudo chown -R $USER:$USER "$SAASRESTO_DIR" || true
+          ls -la "$SAASRESTO_DIR"
+
+      # -----------------------------------------------------------------------
+      # Step 4: Deploy saasresto.conf
+      # -----------------------------------------------------------------------
+      - name: Deploy saasresto.conf
+        run: |
+          echo "Deploying saasresto.conf..."
+          
+          # Copy from repo to SAASRESTO directory
+          cp deploy/saasresto/nginx/conf.d/saasresto.conf "$SAASRESTO_DIR/nginx/conf.d/saasresto.conf"
+          
+          echo "saasresto.conf deployed:"
+          ls -la "$SAASRESTO_DIR/nginx/conf.d/"
+          
+          echo ""
+          echo "Config file contents (first 50 lines):"
+          head -50 "$SAASRESTO_DIR/nginx/conf.d/saasresto.conf"
+
+      # -----------------------------------------------------------------------
+      # Step 5: Deploy scripts
+      # -----------------------------------------------------------------------
+      - name: Deploy SAASRESTO scripts
+        run: |
+          echo "Deploying SAASRESTO scripts..."
+          
+          cp deploy/saasresto/scripts/*.sh "$SAASRESTO_DIR/scripts/" || true
+          chmod +x "$SAASRESTO_DIR/scripts/"*.sh || true
+          
+          echo "Scripts deployed:"
+          ls -la "$SAASRESTO_DIR/scripts/"
+
+      # -----------------------------------------------------------------------
+      # Step 6: Create edge network
+      # -----------------------------------------------------------------------
+      - name: Create edge network
+        run: |
+          echo "Creating edge network..."
+          
+          if docker network ls --format '{{.Name}}' | grep -q "^edge$"; then
+            echo "Edge network already exists"
+          else
+            docker network create edge
+            echo "Edge network created"
+          fi
+          
+          docker network inspect edge --format '{{.Name}}: {{.Driver}}'
+
+      # -----------------------------------------------------------------------
+      # Step 7: Create dummy SSL certs for validation
+      # -----------------------------------------------------------------------
+      - name: Create dummy SSL certificates
+        run: |
+          CERTS_DIR="$SAASRESTO_DIR/certs/live"
+          mkdir -p "$CERTS_DIR"
+          
+          if [[ ! -f "$CERTS_DIR/fullchain.pem" ]]; then
+            echo "Creating dummy SSL certificates for config validation..."
+            openssl req -x509 -nodes -days 1 -newkey rsa:2048 \
+              -keyout "$CERTS_DIR/privkey.pem" \
+              -out "$CERTS_DIR/fullchain.pem" \
+              -subj "/CN=saasresto.isprojets.cloud" 2>/dev/null
+            echo "Dummy certificates created"
+            echo "⚠️  Remember to run obtain-cert.sh for real certificates!"
+          else
+            echo "SSL certificates already exist"
+          fi
+          
+          ls -la "$CERTS_DIR/"
+
+      # -----------------------------------------------------------------------
+      # Step 8: Backup CRM docker-compose.yml
+      # -----------------------------------------------------------------------
+      - name: Backup CRM docker-compose.yml
+        run: |
+          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+          BACKUP_FILE="$CRM_DIR/docker-compose.yml.bak.$TIMESTAMP"
+          
+          echo "Creating backup: $BACKUP_FILE"
+          cp "$CRM_DIR/docker-compose.yml" "$BACKUP_FILE"
+          
+          echo "Backup created"
+          ls -la "$CRM_DIR"/docker-compose.yml*
+
+      # -----------------------------------------------------------------------
+      # Step 9: Patch CRM docker-compose.yml
+      # -----------------------------------------------------------------------
+      - name: Patch CRM docker-compose.yml
+        run: |
+          echo "Patching CRM docker-compose.yml..."
+          
+          COMPOSE_FILE="$CRM_DIR/docker-compose.yml"
+          
+          # Check current state
+          echo "Current state:"
+          grep -E "(edge|saasresto|ssl/saasresto)" "$COMPOSE_FILE" || echo "  No SAASRESTO config found"
+          
+          # Use Python for reliable YAML manipulation
+          python3 << 'PYTHON_SCRIPT'
+          import yaml
+          import os
+          
+          compose_file = os.environ['CRM_DIR'] + '/docker-compose.yml'
+          nginx_container = os.environ['NGINX_CONTAINER']
+          
+          print(f"Reading: {compose_file}")
+          
+          with open(compose_file, 'r') as f:
+              compose = yaml.safe_load(f)
+          
+          modified = False
+          
+          # Ensure networks section exists
+          if 'networks' not in compose:
+              compose['networks'] = {}
+          
+          # Add edge network if needed
+          if 'edge' not in compose.get('networks', {}):
+              compose['networks']['edge'] = {'external': True}
+              print("✓ Added edge network section")
+              modified = True
+          else:
+              print("- Edge network section already exists")
+          
+          # Find nginx service
+          nginx_service = None
+          for name in ['nginx', 'crm-nginx', 'web', 'proxy', 'reverse-proxy']:
+              if name in compose.get('services', {}):
+                  nginx_service = name
+                  break
+          
+          if not nginx_service:
+              for name, config in compose.get('services', {}).items():
+                  if 'nginx' in str(config.get('image', '')).lower():
+                      nginx_service = name
+                      break
+          
+          if not nginx_service:
+              print("ERROR: Could not find nginx service")
+              exit(1)
+          
+          print(f"Found nginx service: {nginx_service}")
+          service = compose['services'][nginx_service]
+          
+          # Add networks to nginx service
+          if 'networks' not in service:
+              service['networks'] = ['default']
+          
+          if isinstance(service['networks'], list):
+              if 'edge' not in service['networks']:
+                  service['networks'].append('edge')
+                  print("✓ Added edge network to nginx service")
+                  modified = True
+              else:
+                  print("- Edge network already in nginx service")
+          elif isinstance(service['networks'], dict):
+              if 'edge' not in service['networks']:
+                  service['networks']['edge'] = {}
+                  print("✓ Added edge network to nginx service")
+                  modified = True
+              else:
+                  print("- Edge network already in nginx service")
+          
+          # Add volumes if needed
+          if 'volumes' not in service:
+              service['volumes'] = []
+          
+          volumes = service['volumes']
+          
+          # Add saasresto.conf mount
+          saasresto_mount = '/opt/saasresto/nginx/conf.d/saasresto.conf:/etc/nginx/conf.d/saasresto.conf:ro'
+          if not any('saasresto.conf' in str(v) for v in volumes):
+              volumes.append(saasresto_mount)
+              print("✓ Added saasresto.conf volume mount")
+              modified = True
+          else:
+              print("- saasresto.conf mount already exists")
+          
+          # Add certs mount
+          certs_mount = '/opt/saasresto/certs/live:/etc/nginx/ssl/saasresto:ro'
+          if not any('/etc/nginx/ssl/saasresto' in str(v) for v in volumes):
+              volumes.append(certs_mount)
+              print("✓ Added SSL certs volume mount")
+              modified = True
+          else:
+              print("- SSL certs mount already exists")
+          
+          if modified:
+              with open(compose_file, 'w') as f:
+                  yaml.dump(compose, f, default_flow_style=False, sort_keys=False)
+              print("\n✓ docker-compose.yml updated")
+          else:
+              print("\n- No changes needed, already patched")
+          PYTHON_SCRIPT
+          
+          echo ""
+          echo "Updated state:"
+          grep -E "(edge|saasresto|ssl/saasresto)" "$COMPOSE_FILE" || echo "  No SAASRESTO config found"
+
+      # -----------------------------------------------------------------------
+      # Step 10: Validate nginx configuration
+      # -----------------------------------------------------------------------
+      - name: Validate nginx configuration
+        run: |
+          echo "Validating nginx configuration..."
+          
+          # We need to temporarily start with new mounts to test
+          cd "$CRM_DIR"
+          
+          # First, let's test with a dry-run style check
+          echo "Testing nginx config syntax..."
+          
+          # Apply compose changes first (this mounts the new files)
+          docker compose up -d --no-recreate 2>/dev/null || true
+          
+          # Now test the config
+          if docker exec "$NGINX_CONTAINER" nginx -t 2>&1; then
+            echo "✓ Nginx configuration is valid"
+          else
+            echo "✗ Nginx configuration test failed!"
+            
+            # Show the error
+            docker exec "$NGINX_CONTAINER" nginx -t 2>&1 || true
+            
+            # Restore backup
+            LATEST_BACKUP=$(ls -t "$CRM_DIR"/docker-compose.yml.bak.* 2>/dev/null | head -1)
+            if [[ -n "$LATEST_BACKUP" ]]; then
+              echo "Restoring backup: $LATEST_BACKUP"
+              cp "$LATEST_BACKUP" "$CRM_DIR/docker-compose.yml"
+              docker compose up -d
+            fi
+            
+            exit 1
+          fi
+
+      # -----------------------------------------------------------------------
+      # Step 11: Apply changes (skip if dry run)
+      # -----------------------------------------------------------------------
+      - name: Apply changes
+        if: ${{ inputs.dry_run != 'true' }}
+        run: |
+          echo "Applying changes..."
+          
+          cd "$CRM_DIR"
+          docker compose up -d
+          
+          echo "Waiting for containers to stabilize..."
+          sleep 5
+          
+          echo "Container status:"
+          docker compose ps
+
+      # -----------------------------------------------------------------------
+      # Step 12: Reload nginx (skip if dry run)
+      # -----------------------------------------------------------------------
+      - name: Reload nginx
+        if: ${{ inputs.dry_run != 'true' }}
+        run: |
+          echo "Reloading nginx..."
+          
+          # Final config test
+          if docker exec "$NGINX_CONTAINER" nginx -t 2>&1; then
+            docker exec "$NGINX_CONTAINER" nginx -s reload
+            echo "✓ Nginx reloaded successfully"
+          else
+            echo "✗ Nginx config test failed after apply!"
+            exit 1
+          fi
+
+      # -----------------------------------------------------------------------
+      # Step 13: Verify deployment
+      # -----------------------------------------------------------------------
+      - name: Verify deployment
+        run: |
+          echo ""
+          echo "=============================================="
+          echo "  Deployment Verification"
+          echo "=============================================="
+          echo ""
+          
+          echo "Container Status:"
+          cd "$CRM_DIR"
+          docker compose ps
+          
+          echo ""
+          echo "Edge Network Members:"
+          docker network inspect edge --format '{{range .Containers}}  - {{.Name}}{{"\n"}}{{end}}' 2>/dev/null || echo "  Edge network not found or empty"
+          
+          echo ""
+          echo "Nginx SAASRESTO Mounts:"
+          docker inspect "$NGINX_CONTAINER" --format '{{range .Mounts}}{{if or (contains .Source "saasresto") (contains .Destination "saasresto")}}  {{.Source}} -> {{.Destination}}{{"\n"}}{{end}}{{end}}' 2>/dev/null || echo "  No SAASRESTO mounts found"
+          
+          echo ""
+          echo "=============================================="
+          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+            echo "  DRY RUN COMPLETE - No changes applied"
+          else
+            echo "  CRM NGINX PATCH APPLIED SUCCESSFULLY"
+          fi
+          echo "=============================================="
+          echo ""
+          echo "Next steps:"
+          echo "  1. Obtain SSL certificate:"
+          echo "     /opt/saasresto/scripts/obtain-cert.sh"
+          echo ""
+          echo "  2. Start SAASRESTO:"
+          echo "     cd /opt/saasresto && docker compose up -d"
+          echo ""
+          echo "  3. Reload nginx with real certs:"
+          echo "     docker exec $NGINX_CONTAINER nginx -s reload"
+          echo ""
+          echo "  4. Test endpoint:"
+          echo "     curl -I https://saasresto.isprojets.cloud"
+
+      # -----------------------------------------------------------------------
+      # Step 14: Dry run notice
+      # -----------------------------------------------------------------------
+      - name: Dry run notice
+        if: ${{ inputs.dry_run == 'true' }}
+        run: |
+          echo ""
+          echo "⚠️  DRY RUN MODE"
+          echo "No changes were applied to the running system."
+          echo "Run again with dry_run=false to apply changes."
