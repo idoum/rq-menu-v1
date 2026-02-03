@@ -140,6 +140,12 @@ jobs:
           echo "🌐 Creating edge network..."
           docker network create edge 2>/dev/null || echo "Edge network already exists"
 
+      - name: Login to GHCR
+        run: |
+          echo "🔐 Logging in to GitHub Container Registry..."
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          echo "✅ GHCR login successful"
+
       - name: Deploy SAASRESTO
         run: |
           cd /opt/saasresto

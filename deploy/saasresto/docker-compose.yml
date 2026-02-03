@@ -35,7 +35,7 @@ services:
   # SAASRESTO Next.js Application
   # ---------------------------------------------------------------------------
   saasresto-app:
-    image: ${SAASRESTO_IMAGE:-ghcr.io/your-org/saasresto:latest}
+    image: ${SAASRESTO_IMAGE:-ghcr.io/idoum/rq-menu-v1:latest}
     container_name: saasresto-app
     restart: unless-stopped
     env_file:
