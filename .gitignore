@@ -30,8 +30,37 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
-.env*
+# =============================================================================
+# Environment files - NEVER commit secrets!
+# =============================================================================
+# All .env files except examples
+.env
+.env.local
+.env.development
+.env.development.local
+.env.test
+.env.test.local
+.env.production
+.env.production.local
+.env.staging
+.env.staging.local
+
+# Keep example files for reference
+!.env.example
+!.env.*.example
+!deploy/**/.env.example
+
+# =============================================================================
+# Secrets & Credentials
+# =============================================================================
+*.key
+*.pem
+*.p12
+*.pfx
+secrets/
+credentials/
+.secrets
+*.secret
 
 # vercel
 .vercel
@@ -40,4 +69,25 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
+# Prisma generated
 /src/generated/prisma
+
+# Uploads (should be in external storage in prod)
+/uploads
+/public/uploads
+
+# Logs
+logs/
+*.log
+
+# IDE
+.idea/
+.vscode/settings.json
+.vscode/launch.json
+
+# OS
+Thumbs.db
+Desktop.ini
+
+# Docker build cache
+.docker-cache/
