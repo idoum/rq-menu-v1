@@ -62,7 +62,7 @@ services:
       retries: 3
       start_period: 60s
     # Entrypoint runs migrations then starts the app
-    command: ["sh", "-c", "npx prisma migrate deploy && npm start"]
+    command: ["sh", "-c", "npx prisma migrate deploy --schema=prisma/schema.prisma && npm start"]
 
   # ---------------------------------------------------------------------------
   # Lego ACME Client (for certificate management)
