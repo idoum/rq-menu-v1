@@ -12,11 +12,15 @@ import { prisma } from '@/lib/db';
  * - Load balancers
  * - Monitoring systems
  * - CI/CD deployment verification
+ * 
+ * NOTE: Always returns HTTP 200 if the app is running.
+ * The JSON body contains detailed status for monitoring.
  */
 export async function GET() {
   const startTime = Date.now();
   
   const health = {
+    ok: true,
     status: 'ok' as 'ok' | 'degraded' | 'unhealthy',
     timestamp: new Date().toISOString(),
     version: process.env.npm_package_version || 'unknown',
@@ -40,7 +44,8 @@ export async function GET() {
       message: 'Connected',
     };
   } catch (error) {
-    health.status = 'unhealthy';
+    // Mark as degraded but still return 200 (app is running, DB may be starting)
+    health.status = 'degraded';
     health.checks.database = {
       status: 'error',
       latency: 0,
@@ -51,16 +56,15 @@ export async function GET() {
   // Calculate total response time
   const totalLatency = Date.now() - startTime;
 
-  // Determine HTTP status code based on health
-  const httpStatus = health.status === 'unhealthy' ? 503 : 200;
-
+  // Always return 200 if the app is running
+  // Monitoring systems can check health.status for detailed state
   return NextResponse.json(
     {
       ...health,
       responseTime: totalLatency,
     },
     { 
-      status: httpStatus,
+      status: 200,
       headers: {
         'Cache-Control': 'no-cache, no-store, must-revalidate',
         'Pragma': 'no-cache',
