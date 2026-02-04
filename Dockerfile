@@ -21,7 +21,7 @@ RUN npm ci --ignore-scripts
 
 # Generate Prisma client (needs DATABASE_URL but doesn't connect)
 ENV DATABASE_URL="postgresql://dummy:dummy@localhost:5432/dummy?schema=public"
-RUN npx prisma generate --schema=prisma/schema.prisma
+RUN npm run db:generate
 
 # -----------------------------------------------------------------------------
 # Stage 2: Builder
@@ -74,6 +74,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 # Copy Prisma client
 COPY --from=deps /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=deps /app/node_modules/@prisma ./node_modules/@prisma
+COPY --from=deps /app/node_modules/prisma ./node_modules/prisma
 
 # Create uploads directory
 RUN mkdir -p /app/uploads && chown -R nextjs:nodejs /app/uploads
